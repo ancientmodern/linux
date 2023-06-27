@@ -247,8 +247,12 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 	sigset_t *oldset = sigmask_to_save();
 	int ret;
 
+	printk("~RISCV~ %s:%d:%s: Enter handle_signal\n", __FILE__, __LINE__, __func__);
+	printk("~RISCV~ Reg info: cause = %ld, a7 = %ld, a0 = %ld, a1 = %ld\n", regs->cause, regs->a7, regs->a0, regs->a1);
+
 	/* Are we from a system call? */
 	if (regs->cause == EXC_SYSCALL) {
+		printk("~RISCV~ Enter EXC_SYSCALL: cause = %ld, a7 = %ld, a0 = %ld, a1 = %ld\n", regs->cause, regs->a7, regs->a0, regs->a1);
 		/* Avoid additional syscall restarting via ret_from_exception */
 		regs->cause = -1UL;
 		/* If so, check system call restarting.. */
@@ -259,6 +263,7 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 			break;
 
 		case -ERESTARTSYS:
+			printk("~RISCV~ %s:%d:%s: Meet -ERESTARTSYS, sa_flags = %lu, SA_RESTART = %u\n", __FILE__, __LINE__, __func__, ksig->ka.sa.sa_flags, SA_RESTART);
 			if (!(ksig->ka.sa.sa_flags & SA_RESTART)) {
 				regs->a0 = -EINTR;
 				break;
@@ -286,14 +291,21 @@ void arch_do_signal_or_restart(struct pt_regs *regs)
 {
 	struct ksignal ksig;
 
+	printk("~RISCV~ %s:%d:%s: Enter arch_do_signal_or_restart\n", __FILE__, __LINE__, __func__);
+	printk("~RISCV~ Before get_signal: cause = %ld, a7 = %ld, a0 = %ld, a1 = %ld\n", regs->cause, regs->a7, regs->a0, regs->a1);
+
 	if (get_signal(&ksig)) {
+		printk("~RISCV~ get_signal is true: cause = %ld, a7 = %ld, a0 = %ld, a1 = %ld\n", regs->cause, regs->a7, regs->a0, regs->a1);
 		/* Actually deliver the signal */
 		handle_signal(&ksig, regs);
 		return;
 	}
 
+	printk("~RISCV~ After get_signal: cause = %ld, a7 = %ld, a0 = %ld, a1 = %ld\n", regs->cause, regs->a7, regs->a0, regs->a1);
+
 	/* Did we come from a system call? */
 	if (regs->cause == EXC_SYSCALL) {
+		printk("~RISCV~ Enter EXC_SYSCALL: cause = %ld, a7 = %ld, a0 = %ld, a1 = %ld\n", regs->cause, regs->a7, regs->a0, regs->a1);
 		/* Avoid additional syscall restarting via ret_from_exception */
 		regs->cause = -1UL;
 
@@ -301,7 +313,14 @@ void arch_do_signal_or_restart(struct pt_regs *regs)
 		switch (regs->a0) {
 		case -ERESTARTNOHAND:
 		case -ERESTARTSYS:
+			printk("~RISCV~ %s:%d:%s: Meet -ERESTARTSYS", __FILE__, __LINE__, __func__);
+			printk("~RISCV~ dump_stack myinit\n");
+			dump_stack();
+			printk("~RISCV~ dump_stack after\n");
+			fallthrough;
 		case -ERESTARTNOINTR:
+			printk("~RISCV~ a0 = %ld, orig_a0 = %ld, epc = %lu\n", regs->a0, regs->orig_a0, regs->epc);
+			printk("~RISCV~ a7 = %ld, a1 = %ld, a2 = %ld, a3 = %ld, a4 = %ld, a5 = %ld, a6 = %ld\n", regs->a7, regs->a1, regs->a2, regs->a3, regs->a4, regs->a5, regs->a6);
                         regs->a0 = regs->orig_a0;
 			regs->epc -= 0x4;
 			break;

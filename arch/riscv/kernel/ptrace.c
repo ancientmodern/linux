@@ -21,6 +21,7 @@
 
 enum riscv_regset {
 	REGSET_X,
+	REGSET_CAUSE,
 #ifdef CONFIG_FPU
 	REGSET_F,
 #endif
@@ -43,6 +44,28 @@ static int riscv_gpr_set(struct task_struct *target,
 
 	regs = task_pt_regs(target);
 	return user_regset_copyin(&pos, &count, &kbuf, &ubuf, regs, 0, -1);
+}
+
+static int riscv_cause_get(struct task_struct *target,
+			   const struct user_regset *regset,
+			   struct membuf to)
+{
+	unsigned long cause = task_pt_regs(target)->cause;
+	printk("~RISCV~ riscv_cause_get: cause = %lu\n", cause);
+
+	return membuf_store(&to, cause);
+}
+
+static int riscv_cause_set(struct task_struct *target,
+			   const struct user_regset *regset,
+			   unsigned int pos, unsigned int count,
+			   const void *kbuf, const void __user *ubuf)
+{
+	unsigned long *data = &(task_pt_regs(target)->cause);
+	printk("~RISCV~ riscv_cause_set: pos = %u, count = %u\n", pos, count);
+
+	return user_regset_copyin(&pos, &count, &kbuf, &ubuf, 
+				data, 0, sizeof(unsigned long));
 }
 
 #ifdef CONFIG_FPU
@@ -88,6 +111,14 @@ static const struct user_regset riscv_user_regset[] = {
 		.align = sizeof(elf_greg_t),
 		.regset_get = riscv_gpr_get,
 		.set = riscv_gpr_set,
+	},
+	[REGSET_CAUSE] = {
+		.core_note_type = NT_RISCV_CAUSE,
+		.n = 1,
+		.size = sizeof(elf_greg_t),
+		.align = sizeof(elf_greg_t),
+		.regset_get = riscv_cause_get,
+		.set = riscv_cause_set,
 	},
 #ifdef CONFIG_FPU
 	[REGSET_F] = {
@@ -149,10 +180,10 @@ static const struct pt_regs_offset regoffset_table[] = {
 	REG_OFFSET_NAME(t4),
 	REG_OFFSET_NAME(t5),
 	REG_OFFSET_NAME(t6),
+	REG_OFFSET_NAME(orig_a0),
 	REG_OFFSET_NAME(status),
 	REG_OFFSET_NAME(badaddr),
 	REG_OFFSET_NAME(cause),
-	REG_OFFSET_NAME(orig_a0),
 	REG_OFFSET_END,
 };
 

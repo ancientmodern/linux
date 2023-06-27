@@ -87,8 +87,14 @@ static inline void syscall_handler(struct pt_regs *regs, ulong syscall)
 #endif
 		fn = sys_call_table[syscall];
 
+	if (syscall == 207 || (syscall == 63 && regs->orig_a0 == 0 && regs->a2 == 4))
+		printk("syscall_handler: start syscall %ld: a0 = %ld, orig_a0 = %ld\n", syscall, regs->a0, regs->orig_a0);
+
 	regs->a0 = fn(regs->orig_a0, regs->a1, regs->a2,
 		      regs->a3, regs->a4, regs->a5, regs->a6);
+
+	if (syscall == 207 || (syscall == 63 && regs->orig_a0 == 0 && regs->a2 == 4))
+		printk("syscall_handler: after syscall %ld: a0 = %ld, orig_a0 = %ld\n", syscall, regs->a0, regs->orig_a0);
 }
 
 static inline bool arch_syscall_is_vdso_sigreturn(struct pt_regs *regs)
