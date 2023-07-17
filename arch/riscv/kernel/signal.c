@@ -16,6 +16,7 @@
 
 #include <asm/ucontext.h>
 #include <asm/vdso.h>
+#include <asm/syscall.h>
 #include <asm/signal.h>
 #include <asm/signal32.h>
 #include <asm/switch_to.h>
@@ -144,7 +145,7 @@ static long __restore_v_state(struct pt_regs *regs, void __user *sc_vec)
 #endif
 
 static long restore_sigcontext(struct pt_regs *regs,
-	struct sigcontext __user *sc)
+			       struct sigcontext __user *sc)
 {
 	void __user *sc_ext_ptr = &sc->sc_extdesc.hdr;
 	__u32 rsvd;
@@ -260,15 +261,15 @@ badframe:
 	if (show_unhandled_signals) {
 		pr_info_ratelimited(
 			"%s[%d]: bad frame in %s: frame=%p pc=%p sp=%p\n",
-			task->comm, task_pid_nr(task), __func__,
-			frame, (void *)regs->epc, (void *)regs->sp);
+			task->comm, task_pid_nr(task), __func__, frame,
+			(void *)regs->epc, (void *)regs->sp);
 	}
 	force_sig(SIGSEGV);
 	return 0;
 }
 
 static long setup_sigcontext(struct rt_sigframe __user *frame,
-	struct pt_regs *regs)
+			     struct pt_regs *regs)
 {
 	struct sigcontext __user *sc = &frame->uc.uc_mcontext;
 	struct __riscv_ctx_hdr __user *sc_ext_ptr = &sc->sc_extdesc.hdr;
@@ -292,7 +293,7 @@ static long setup_sigcontext(struct rt_sigframe __user *frame,
 }
 
 static inline void __user *get_sigframe(struct ksignal *ksig,
-	struct pt_regs *regs, size_t framesize)
+					struct pt_regs *regs, size_t framesize)
 {
 	unsigned long sp;
 	/* Default to using normal stack */
@@ -322,7 +323,7 @@ static inline void __user *get_sigframe(struct ksignal *ksig,
 }
 
 static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
-	struct pt_regs *regs)
+			  struct pt_regs *regs)
 {
 	struct rt_sigframe __user *frame;
 	long err = 0;
@@ -344,10 +345,10 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	if (err)
 		return -EFAULT;
 
-	/* Set up to return from userspace. */
+		/* Set up to return from userspace. */
 #ifdef CONFIG_MMU
-	regs->ra = (unsigned long)VDSO_SYMBOL(
-		current->mm->context.vdso, rt_sigreturn);
+	regs->ra = (unsigned long)VDSO_SYMBOL(current->mm->context.vdso,
+					      rt_sigreturn);
 #else
 	/*
 	 * For the nommu case we don't have a VDSO.  Instead we push two
@@ -373,9 +374,9 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	 */
 	regs->epc = (unsigned long)ksig->ka.sa.sa_handler;
 	regs->sp = (unsigned long)frame;
-	regs->a0 = ksig->sig;                     /* a0: signal number */
+	regs->a0 = ksig->sig; /* a0: signal number */
 	regs->a1 = (unsigned long)(&frame->info); /* a1: siginfo pointer */
-	regs->a2 = (unsigned long)(&frame->uc);   /* a2: ucontext pointer */
+	regs->a2 = (unsigned long)(&frame->uc); /* a2: ucontext pointer */
 
 #if DEBUG_SIG
 	pr_info("SIG deliver (%s:%d): sig=%d pc=%p ra=%p sp=%p\n",
@@ -409,7 +410,7 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 			}
 			fallthrough;
 		case -ERESTARTNOINTR:
-                        regs->a0 = regs->orig_a0;
+			regs->a0 = regs->orig_a0;
 			regs->epc -= 0x4;
 			break;
 		}
@@ -428,33 +429,77 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 
 void arch_do_signal_or_restart(struct pt_regs *regs)
 {
+	unsigned long continue_addr = 0, restart_addr = 0;
+	int retval = 0;
 	struct ksignal ksig;
+	bool syscall = (regs->cause == EXC_SYSCALL);
 
+	/* Did we come from a system call? */
+	if (syscall) {
+		continue_addr = regs->epc;
+		restart_addr = continue_addr - 4;
+		retval = regs->a0;
+
+		/* Avoid additional syscall restarting via ret_from_exception */
+		regs->cause = -1UL;
+
+		/*
+		 * Prepare for system call restart. We do this here so that a
+		 * debugger will see the already changed PC.
+		 */
+		switch (retval) {
+		case -ERESTARTNOHAND:
+		case -ERESTARTSYS:
+		case -ERESTARTNOINTR:
+			regs->a0 = regs->orig_a0;
+			regs->epc = restart_addr;
+			break;
+		case -ERESTART_RESTARTBLOCK:
+			regs->a0 = regs->orig_a0;
+			regs->a7 = __NR_restart_syscall;
+			regs->epc = restart_addr;
+			break;
+		}
+	}
+
+	// printk("~RISCV~ Before get_signal: a7 = %ld, a0 = %ld, orig_a0 = %ld, cause = %ld\n",
+	//        regs->a7, regs->a0, regs->orig_a0, regs->cause);
+
+	/*
+	 * Get the signal to deliver. When running under ptrace, at this point
+	 * the debugger may change all of our registers.
+	 */
 	if (get_signal(&ksig)) {
+		/*
+		 * Depending on the signal settings, we may need to revert the
+		 * decision to restart the system call, but skip this if a
+		 * debugger has chosen to restart at a different PC.
+		 */
+		if (regs->epc == restart_addr &&
+		    (retval == -ERESTARTNOHAND ||
+		     retval == -ERESTART_RESTARTBLOCK ||
+		     (retval == -ERESTARTSYS &&
+		      !(ksig.ka.sa.sa_flags & SA_RESTART)))) {
+			syscall_set_return_value(current, regs, -EINTR, 0);
+			regs->epc = continue_addr;
+		}
+
 		/* Actually deliver the signal */
 		handle_signal(&ksig, regs);
 		return;
 	}
 
-	/* Did we come from a system call? */
-	if (regs->cause == EXC_SYSCALL) {
-		/* Avoid additional syscall restarting via ret_from_exception */
-		regs->cause = -1UL;
+	// printk("~RISCV~ After get_signal: a7 = %ld, a0 = %ld, orig_a0 = %ld, cause = %ld\n",
+	//        regs->a7, regs->a0, regs->orig_a0, regs->cause);
 
-		/* Restart the system call - no handlers present */
-		switch (regs->a0) {
-		case -ERESTARTNOHAND:
-		case -ERESTARTSYS:
-		case -ERESTARTNOINTR:
-                        regs->a0 = regs->orig_a0;
-			regs->epc -= 0x4;
-			break;
-		case -ERESTART_RESTARTBLOCK:
-                        regs->a0 = regs->orig_a0;
+	/*
+	 * Handle restarting a different system call. As above, if a debugger
+	 * has chosen to restart at a different PC, ignore the restart.
+	 */
+	if (syscall && regs->epc == restart_addr) {
+		if (retval == -ERESTART_RESTARTBLOCK)
 			regs->a7 = __NR_restart_syscall;
-			regs->epc -= 0x4;
-			break;
-		}
+		// user_rewind_single_step(current);
 	}
 
 	/*
