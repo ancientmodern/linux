@@ -791,7 +791,8 @@ retry:
 	if (flags & O_CREAT) {
 		struct ceph_file_layout lo;
 
-		req->r_dentry_drop = CEPH_CAP_FILE_SHARED | CEPH_CAP_AUTH_EXCL;
+		req->r_dentry_drop = CEPH_CAP_FILE_SHARED | CEPH_CAP_AUTH_EXCL |
+				     CEPH_CAP_XATTR_EXCL;
 		req->r_dentry_unless = CEPH_CAP_FILE_EXCL;
 		if (as_ctx.pagelist) {
 			req->r_pagelist = as_ctx.pagelist;
@@ -1854,9 +1855,6 @@ retry_snap:
 	else
 		ceph_start_io_write(inode);
 
-	/* We can write back this queue in page reclaim */
-	current->backing_dev_info = inode_to_bdi(inode);
-
 	if (iocb->ki_flags & IOCB_APPEND) {
 		err = ceph_do_getattr(inode, CEPH_STAT_CAP_SIZE, false);
 		if (err < 0)
@@ -1957,8 +1955,6 @@ retry_snap:
 		 * can not run at the same time
 		 */
 		written = generic_perform_write(iocb, from);
-		if (likely(written >= 0))
-			iocb->ki_pos = pos + written;
 		ceph_end_io_write(inode);
 	}
 
@@ -2003,7 +1999,6 @@ out:
 		ceph_end_io_write(inode);
 out_unlocked:
 	ceph_free_cap_flush(prealloc_cf);
-	current->backing_dev_info = NULL;
 	return written ? written : err;
 }
 
